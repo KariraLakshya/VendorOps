@@ -1,0 +1,124 @@
+name: zelosify-recruit-backend
+
+services:
+  postgres:
+    # Pinned (not :latest): Postgres 18 changed its expected data directory
+    # layout (wants a mount at /var/lib/postgresql, not .../data), which
+    # broke this compose file's volume mount outright when :latest rolled
+    # forward — verified live 2026-09-20. Pin major versions in general;
+    # this one specifically needs it to not silently crash-loop.
+    image: postgres:16-alpine
+    container_name: recruit-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: testrun
+      POSTGRES_DB: zelosify_recruit_test
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5445:5432" # Expose internal 5432 on host port 5445 (Port 5445 can be used to connect psql outside the container)
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:latest
+    container_name: recruit-keycloak
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - KEYCLOAK_ADMIN=admin
+      - KEYCLOAK_ADMIN_PASSWORD=admin
+      - KC_DB=postgres
+      - KC_DB_URL=jdbc:postgresql://postgres:5432/zelosify_recruit_test
+      - KC_DB_USERNAME=postgres
+      - KC_DB_PASSWORD=testrun
+      - KC_DB_SCHEMA=public
+      - KC_HOSTNAME_STRICT=false
+      - KC_HTTP_ENABLED=true
+      - KC_HEALTH_ENABLED=true
+      - KC_TRANSACTION_XA_ENABLED=false
+      - KC_CLUSTERING=disabled
+      - KC_HOSTNAME=localhost
+      - KC_HOSTNAME_PORT=8080
+      - KC_PROXY_HEADERS=forwarded
+      - KC_DB_POOL_INITIAL_SIZE=1
+      - KC_DB_POOL_MIN_SIZE=2
+      - KC_DB_POOL_MAX_SIZE=5
+      - KC_LOG_LEVEL=INFO,org.keycloak.services:debug
+      - KC_SPI_PROTOCOL_OPENID_CONNECT_LEGACY_LOGOUT_REDIRECT_URI=true
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    ports:
+      - "8080:8080"
+    command:
+      - start-dev
+      - --http-enabled=true
+      - --hostname-strict=false
+      - --http-relative-path=/auth
+      - --proxy-headers=forwarded
+    networks:
+      - backend_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/auth/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  minio:
+    # MinIO deprecated their Docker Hub images (minio/minio, minio/mc) in
+    # 2025 — pulling them now fails with "pull access denied". Use the
+    # still-maintained quay.io mirror instead (verified live 2026-09-20).
+    image: quay.io/minio/minio:latest
+    container_name: recruit-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000" # S3 API (matches S3_ENDPOINT in .env)
+      - "9001:9001" # Web console
+    command: server /data --console-address ":9001"
+    networks:
+      - backend_net
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: quay.io/minio/mc:latest
+    container_name: recruit-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 minioadmin minioadmin &&
+      mc mb -p local/zelosify-contract-uploads &&
+      exit 0
+      "
+    networks:
+      - backend_net
+
+networks:
+  backend_net:
+    driver: bridge
+
+volumes:
+  keycloak_data:
+    driver: local
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local

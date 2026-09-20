@@ -1,0 +1,150 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String       @id @default(uuid())
+  username        String?      @unique 
+  email           String
+  firstName       String?
+  lastName        String?
+  phoneNumber     String?
+  department      String?
+  role            Role
+  tenantId        String?
+  externalId      String?      @unique 
+  totpSecret      String?
+  profileComplete Boolean      @default(false)
+  provider        AuthProvider @default(KEYCLOAK)
+  creator         String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  // Add the new optional token fields:
+  accessToken     String?
+  refreshToken    String?
+
+  // Relation to tenant
+  tenant          Tenants?     @relation(fields: [tenantId], references: [tenantId])
+
+  @@unique([email, provider])
+  @@index([tenantId])
+}
+
+model Tenants {
+  tenantId            String    @id @default(uuid())
+  companyName         String    @default("DemoTenant")
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  users               User[]
+  openings            Opening[]
+}
+
+enum AuthProvider {
+  KEYCLOAK
+  GOOGLE
+  MICROSOFT
+}
+
+enum Role {
+  ADMIN
+  BUSINESS_APPROVER
+  BUSINESS_USER
+  FINANCE_MANAGER
+  HIRING_MANAGER
+  IT_VENDOR
+  PROCUREMENT_MANAGER
+  RESOURCE_MANAGER
+  VENDOR_MANAGER
+}
+
+// =============================================================================
+// CONTRACT HIRING MODULE
+// =============================================================================
+
+model Opening {
+  id                      String          @id @default(uuid())
+  tenantId                String
+  title                   String
+  description             String?
+  location                String?
+  contractType            String?
+  hiringManagerId         String
+  requiredSkills          String[]        @default([])
+  experienceMin           Int
+  experienceMax           Int?
+  postedDate              DateTime        @default(now())
+  expectedCompletionDate  DateTime?
+  actionDate              DateTime?
+  status                  OpeningStatus   @default(OPEN)
+
+  tenant                  Tenants         @relation(fields: [tenantId], references: [tenantId])
+  hiringProfiles          hiringProfile[]
+
+  @@index([tenantId])
+  @@index([hiringManagerId])
+}
+
+model hiringProfile {
+  id                        Int           @id @default(autoincrement())
+  openingId                 String
+  tenantId                  String
+  s3Key                     String        @unique
+  fileName                  String
+  uploadedBy                String
+  submittedAt               DateTime      @default(now())
+  status                    ProfileStatus @default(SUBMITTED)
+
+  shortlistedBy             String?
+  shortlistedAt             DateTime?
+  rejectedBy                String?
+  rejectedAt                DateTime?
+
+  // AI Agent Fields
+  recommended               Boolean?
+  recommendationScore       Float?
+  recommendationReason      String?
+  recommendationLatencyMs   Int?
+  recommendationVersion     String?
+  recommendationConfidence  Float?
+  recommendationStatus      RecommendationStatus @default(PENDING)
+  recommendationError       String?
+  recommendationMetadata    Json?
+  recommendedAt             DateTime?
+
+  isDeleted                 Boolean       @default(false)
+  deletedAt                 DateTime?
+
+  opening                   Opening       @relation(fields: [openingId], references: [id])
+
+  @@index([openingId])
+  @@index([recommended])
+  @@index([tenantId])
+  @@index([uploadedBy])
+}
+
+enum OpeningStatus {
+  OPEN
+  CLOSED
+  ON_HOLD
+}
+
+enum ProfileStatus {
+  SUBMITTED
+  SHORTLISTED
+  REJECTED
+}
+
+enum RecommendationStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
